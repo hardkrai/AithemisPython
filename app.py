@@ -2,7 +2,7 @@ import streamlit as st
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
-
+from docx import Document
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 import google.generativeai as genai
 from langchain.vectorstores import FAISS
@@ -26,9 +26,25 @@ def get_pdf_text(pdf_docs):
             text += page.extract_text()
     return text
 
+# Function to extract text from .txt files
+def get_txt_text(txt_docs):
+    text = ""
+    for txt in txt_docs:
+        text += txt.read().decode("utf-8")  # Reading and decoding the .txt file
+    return text
+
+# Function to extract text from .docx files
+def get_docx_text(docx_docs):
+    text = ""
+    for docx in docx_docs:
+        doc = Document(docx)
+        for para in doc.paragraphs:
+            text += para.text + "\n"
+    return text
+
 # Function to split text into chunks
 def get_text_chunks(text):
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=1000)  # Adjust chunk size if necessary
     chunks = text_splitter.split_text(text)
     return chunks
 
@@ -61,10 +77,18 @@ def user_input(user_question):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
 
     # Load the FAISS vector store with the safe deserialization flag
-    new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+    try:
+        new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+    except Exception as e:
+        st.error(f"Error loading vector store: {e}")
+        return
 
     # Perform a similarity search
-    docs = new_db.similarity_search(user_question)
+    docs = new_db.similarity_search(user_question, k=3)  # Get top 3 results for better context
+
+    if not docs:
+        st.write("No relevant documents found.")
+        return
 
     # Get the conversational chain
     chain = get_conversational_chain()
@@ -91,17 +115,35 @@ def main():
 
     with st.sidebar:
         st.title("Menu:")
-        pdf_docs = st.file_uploader(
-            "Upload your PDF files and click on the Submit & Process button",
+        uploaded_files = st.file_uploader(
+            "Upload your PDF, DOCX, or TXT files and click on the Submit & Process button",
             accept_multiple_files=True,
         )
         if st.button("Submit & Process"):
             with st.spinner("Processing..."):
-                # Process uploaded files
-                raw_text = get_pdf_text(pdf_docs)
+                raw_text = ""
+                pdf_files = [file for file in uploaded_files if file.name.endswith(".pdf")]
+                txt_files = [file for file in uploaded_files if file.name.endswith(".txt")]
+                docx_files = [file for file in uploaded_files if file.name.endswith(".docx")]
+
+                # Process PDF files
+                if pdf_files:
+                    raw_text += get_pdf_text(pdf_files)
+                
+                # Process TXT files
+                if txt_files:
+                    raw_text += get_txt_text(txt_files)
+                
+                # Process DOCX files
+                if docx_files:
+                    raw_text += get_docx_text(docx_files)
+
+                # Split the combined raw text into chunks
                 text_chunks = get_text_chunks(raw_text)
+
+                # Create and save the FAISS vector store
                 get_vector_store(text_chunks)
-                st.success("Done")
+                st.success("Processing complete and vector store created.")
 
 if __name__ == "__main__":
     main()
